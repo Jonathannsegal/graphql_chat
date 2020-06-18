@@ -1,0 +1,23 @@
+version: "3.8"
+services:
+  apollo:
+    container_name: apollo
+    build:
+      context: .
+      dockerfile: ./dockerfile
+    volumes:
+        - ./:/usr/src/app
+        - /usr/src/app/node_modules
+    ports:
+      - '4000:4000'
+    links:
+      - mongo
+  mongo:
+    container_name: mongodb
+    image: "mvertes/alpine-mongo"
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongodb_data_container:/data/db
+volumes:
+  mongodb_data_container:
