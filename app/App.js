@@ -1,22 +1,21 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ApolloClient, ApolloProvider, split, HttpLink, InMemoryCache } from '@apollo/client';
 import { getMainDefinition } from '@apollo/client/utilities';
-import { WebSocketLink } from '@apollo/link-ws';
+import { GraphQLWsLink } from '@apollo/client/link/subscriptions';
+import { createClient } from 'graphql-ws';
 import { ChatScreen } from './src/ChatScreen';
 import { LoginScreen } from './src/LoginScreen';
 import Constants from 'expo-constants';
 
-const wsLink = new WebSocketLink({
-  uri: Constants.manifest.extra.WSHOST || 'ws://localhost:4000/graphql',
-  options: {
-    reconnect: true
-  }
-});
+const extra = Constants.expoConfig?.extra || {};
+const wsLink = new GraphQLWsLink(createClient({
+  url: extra.WSHOST || 'ws://localhost:4000/graphql'
+}));
 
 const httpLink = new HttpLink({
-  uri: Constants.manifest.extra.HTTPHOST || 'http://localhost:4000/'
+  uri: extra.HTTPHOST || 'http://localhost:4000/graphql'
 });
 
 const link = split(
@@ -33,7 +32,7 @@ const client = new ApolloClient({
   link
 });
 
-const Stack = createStackNavigator();
+const Stack = createNativeStackNavigator();
 
 const App = () => (
   <ApolloProvider client={client}>

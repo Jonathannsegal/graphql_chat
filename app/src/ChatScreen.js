@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { TextInput, TouchableOpacity, TouchableWithoutFeedback, Keyboard, Text, View, KeyboardAvoidingView } from 'react-native';
-import AsyncStorage from '@react-native-community/async-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMutation } from '@apollo/client';
 import { Messages } from './components/Messages';
 import { POST_MESSAGE } from './constants/graphql';

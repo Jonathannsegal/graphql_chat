@@ -1,117 +1,65 @@
-const { ApolloServer, PubSub, gql } = require('apollo-server');
-const MongoClient = require('mongodb').MongoClient;
-const ObjectId = require('mongodb').ObjectId;
-const {SecretManagerServiceClient} = require('@google-cloud/secret-manager');
-const pubsub = new PubSub();
-require('dotenv').config();
+const { createServer } = require('node:http')
+const { createSchema, createYoga, createPubSub } = require('graphql-yoga')
+const { MongoClient, ObjectId } = require('mongodb')
+const { SecretManagerServiceClient } = require('@google-cloud/secret-manager')
+require('dotenv').config()
 
-async function main() {
-  // To access your secret change graphqlchatgcp to your project id
-  const name = 'projects/graphqlchatgcp/secrets/DB_HOST/versions/1';
-  const client = new SecretManagerServiceClient();
-  async function accessSecretVersion() {
-    try {
-      const [accessResponse] = await client.accessSecretVersion({
-        name: name
-      });
-      const responsePayload = accessResponse.payload.data.toString('utf8');
-      next(responsePayload)
-    } catch (error) {
-      console.log(error);
-      next(process.env.DB_HOST)
-    }    
-  }
-  accessSecretVersion();
-}
+const pubSub = createPubSub()
 
-main();
-
-function next(uri) {
-  const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
-  client.connect()
-  .then(() => {
-      console.log('Connection to DB successful');
-      db = client.db("data");
-  })
-  .catch(err => {
-      console.log('Db connection error ', err);
-  });
-
-const typeDefs = gql`
-  type user {
-    _id: ID!,
-    username: String!
-  }
-  type message {
-    _id: ID!,
-    text: String!
-    userId: String!
-    username: String!
-  }
-  type Query {
-    userById(userId: String!): user
-    users: [user]
-    messages: [message]
-  }
+const typeDefs = /* GraphQL */ `
+  type User { _id: ID!, username: String! }
+  type Message { _id: ID!, text: String!, userId: String!, username: String! }
+  type Query { userById(userId: String!): User, users: [User!]!, messages: [Message!]! }
   type Mutation {
-    addUser(username: String!): user
-    addMessage(text: String!, userId: String!, username: String!): message
+    addUser(username: String!): User!
+    addMessage(text: String!, userId: String!, username: String!): Message!
   }
-  type Subscription{
-    messages: message
-  }
+  type Subscription { messages: Message! }
 `
 
-const MESSAGE_ADDED = 'MESSAGE_ADDED';
+async function getMongoUri() {
+  if (process.env.DB_HOST) return process.env.DB_HOST
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || 'graphqlchatgcp'
+  const name = `projects/${projectId}/secrets/DB_HOST/versions/latest`
+  const [version] = await new SecretManagerServiceClient().accessSecretVersion({ name })
+  return version.payload.data.toString('utf8')
+}
 
-const resolvers = {
-  Query: {
-      userById: async (_, input) => {
-          user = await db.collection('users').find({_id : new ObjectId(input.userId)}).toArray().then(res => { return res });
-          return user[0];
-      },
-      users: async () => {
-          users = await db.collection('users').find().toArray().then(res => { return res });
-          return users;
-      },
-      messages: async () => {
-          messages = await db.collection('messages').find().toArray().then(res => { return res });
-          return messages;
-      }
-  },
-  Mutation: {
+async function start() {
+  const mongo = new MongoClient(await getMongoUri())
+  await mongo.connect()
+  const db = mongo.db('data')
+
+  const resolvers = {
+    Query: {
+      userById: async (_, { userId }) => db.collection('users').findOne({ _id: new ObjectId(userId) }),
+      users: async () => db.collection('users').find().toArray(),
+      messages: async () => db.collection('messages').find().toArray(),
+    },
+    Mutation: {
       addUser: async (_, input) => {
-          try {
-              const newUser = await  db.collection('users').insertOne(input);
-              const normalizedInput = { '_id': newUser.ops[0]._id, 'username': newUser.ops[0].username};
-              return normalizedInput;
-          } catch (error) {
-              return error;
-          }
+        const result = await db.collection('users').insertOne(input)
+        return { _id: result.insertedId, ...input }
       },
       addMessage: async (_, input) => {
-          try {
-              const newMessge = await  db.collection('messages').insertOne(input);
-              const normalizedInput = { '_id': newMessge.ops[0]._id, 'text': newMessge.ops[0].text, 'userId': newMessge.ops[0].userId, 'username': newMessge.ops[0].username};
-              pubsub.publish(MESSAGE_ADDED, { messages: normalizedInput });
-              return normalizedInput;
-          } catch (error) {
-              return error;
-          }
-      }
-  },
-  Subscription: {
-      messages: {
-          subscribe () {
-              return pubsub.asyncIterator([MESSAGE_ADDED]);
-          }
-      }
+        const result = await db.collection('messages').insertOne(input)
+        const message = { _id: result.insertedId, ...input }
+        pubSub.publish('messages', { messages: message })
+        return message
+      },
+    },
+    Subscription: {
+      messages: { subscribe: () => pubSub.subscribe('messages') },
+    },
   }
-};
 
-const server = new ApolloServer({ typeDefs, resolvers });
-
-server.listen(process.env.PORT || 4000).then(({ url }) => {
-  console.log(`🚀  Server ready at ${url}`);
-});
+  const yoga = createYoga({ schema: createSchema({ typeDefs, resolvers }) })
+  createServer(yoga).listen(process.env.PORT || 4000, () => {
+    console.log(`GraphQL Chat API ready at http://localhost:${process.env.PORT || 4000}/graphql`)
+  })
 }
+
+start().catch(error => {
+  console.error('Unable to start GraphQL Chat API:', error)
+  process.exitCode = 1
+})
